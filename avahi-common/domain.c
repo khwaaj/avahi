@@ -546,7 +546,9 @@ int avahi_service_name_split(const char *p, char *name, size_t name_size, char *
                         return AVAHI_ERR_NO_MEMORY;
 
                     break;
-                }
+                } else if (type_empty && *p)
+                    /* This is likely an incorrectly provided name, just drop it */
+                    break;
 
                 state = DOMAIN;
                 /* fall through */
