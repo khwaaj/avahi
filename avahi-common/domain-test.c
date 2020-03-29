@@ -24,9 +24,28 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
+#include <stdlib.h>
 
 #include "domain.h"
 #include "malloc.h"
+
+static int test_kt(const char* k, int ex) {
+    int t = avahi_assess_domain_name(k);
+    if (getenv("DEBUG")) {
+        printf("%-48s -> %-4s [ ", k, (t == ex) ? "OK" : "FAIL");
+        if (t != AVAHI_KEY_INVALID) {
+            printf("%s ", (t & AVAHI_KEY_SERVICE_NAME) ? "SN" : "  ");
+            printf("%s ", (t & AVAHI_KEY_SERVICE_SUBTYPE) ? "SST" : "   ");
+            printf("%s ", (t & AVAHI_KEY_SERVICE_TYPE) ? "ST" : "  ");
+            printf("%s ", (t & AVAHI_KEY_DOMAIN_NAME) ? "DN" : "  ");
+            printf("%s ", (t & AVAHI_KEY_DOMAIN_ROOT) ? "DR" : "  ");
+        } else {
+            printf("%-15s ", t ? "---------------" : "");
+        }
+        printf("]\n");
+    }
+    return (t == ex);
+}
 
 int main(AVAHI_GCC_UNUSED int argc, AVAHI_GCC_UNUSED char *argv[]) {
     char *s;
@@ -99,12 +118,18 @@ int main(AVAHI_GCC_UNUSED int argc, AVAHI_GCC_UNUSED char *argv[]) {
 
     printf("%s\n", avahi_get_type_from_subtype("_foo._sub._bar._tcp"));
 
+    assert(!avahi_is_valid_host_name(""));
+    assert(!avahi_is_valid_host_name("."));
     assert(!avahi_is_valid_host_name("sf.ooo."));
-    assert(avahi_is_valid_host_name("sfooo."));
+    assert(!avahi_is_valid_host_name("sfooo."));
     assert(avahi_is_valid_host_name("sfooo"));
 
+    assert(!avahi_is_valid_domain_name(".."));
     assert(avahi_is_valid_domain_name("."));
     assert(avahi_is_valid_domain_name(""));
+    assert(!avahi_is_valid_domain_name("com.."));
+    assert(avahi_is_valid_domain_name("com."));
+    assert(avahi_is_valid_domain_name("com"));
 
     assert(avahi_normalize_name(".", t, sizeof(t)));
     assert(avahi_normalize_name("", t, sizeof(t)));
@@ -118,6 +143,48 @@ int main(AVAHI_GCC_UNUSED int argc, AVAHI_GCC_UNUSED char *argv[]) {
     assert(!avahi_is_valid_fqdn("192.168.50.1"));
     assert(!avahi_is_valid_fqdn("::1"));
     assert(!avahi_is_valid_fqdn(".192.168.50.1."));
+
+    assert(test_kt(NULL, AVAHI_KEY_INVALID));
+    assert(test_kt("", AVAHI_KEY_DOMAIN_ROOT));
+    assert(test_kt(".", AVAHI_KEY_DOMAIN_ROOT));
+    assert(test_kt("..", AVAHI_KEY_INVALID));
+
+    assert(test_kt("domain", AVAHI_KEY_DOMAIN_NAME));
+    assert(test_kt("domain.", AVAHI_KEY_DOMAIN_NAME | AVAHI_KEY_DOMAIN_ROOT));
+    assert(test_kt("domain..", AVAHI_KEY_INVALID));
+    assert(test_kt(".domain", AVAHI_KEY_DOMAIN_NAME));
+    assert(test_kt(".domain.", AVAHI_KEY_DOMAIN_NAME | AVAHI_KEY_DOMAIN_ROOT));
+    assert(test_kt(".domain..", AVAHI_KEY_INVALID));
+
+    assert(test_kt("host.domain", AVAHI_KEY_DOMAIN_NAME));
+    assert(test_kt("sub.host.domain", AVAHI_KEY_DOMAIN_NAME));
+    assert(test_kt("sub.sub.host.domain", AVAHI_KEY_DOMAIN_NAME));
+
+    /* _bar is an unknown service protocol & will be treated as a normal domain name */
+    assert(test_kt("foo._bar", AVAHI_KEY_DOMAIN_NAME));
+    assert(test_kt("_foo._bar", AVAHI_KEY_DOMAIN_NAME));
+    assert(test_kt("_foo._bar.", AVAHI_KEY_DOMAIN_NAME | AVAHI_KEY_DOMAIN_ROOT));
+    assert(test_kt("_foo._bar.domain", AVAHI_KEY_DOMAIN_NAME));
+    assert(test_kt("_foo._bar.domain.", AVAHI_KEY_DOMAIN_NAME | AVAHI_KEY_DOMAIN_ROOT));
+    assert(test_kt("name._foo._bar.domain", AVAHI_KEY_DOMAIN_NAME));
+    assert(test_kt("_name._foo._bar.domain", AVAHI_KEY_DOMAIN_NAME));
+
+    /* _tcp & _udp are known service protocols and are treated the same, just test one of them */
+    assert(test_kt("foo._tcp", AVAHI_KEY_INVALID));
+    assert(test_kt("_svc._tcp", AVAHI_KEY_SERVICE_TYPE));
+    assert(test_kt("_svc._tcp.", AVAHI_KEY_SERVICE_TYPE | AVAHI_KEY_DOMAIN_ROOT));
+    assert(test_kt("_svc._tcp.domain", AVAHI_KEY_SERVICE_TYPE | AVAHI_KEY_DOMAIN_NAME));
+    assert(test_kt("_svc._tcp.domain.", AVAHI_KEY_SERVICE_TYPE | AVAHI_KEY_DOMAIN_NAME | AVAHI_KEY_DOMAIN_ROOT));
+    assert(test_kt("name._svc._tcp.domain", AVAHI_KEY_SERVICE_NAME | AVAHI_KEY_SERVICE_TYPE | AVAHI_KEY_DOMAIN_NAME));
+    assert(test_kt("_name._svc._tcp.domain", AVAHI_KEY_SERVICE_NAME | AVAHI_KEY_SERVICE_TYPE | AVAHI_KEY_DOMAIN_NAME));
+
+    assert(test_kt("foo._sub._svc._tcp", AVAHI_KEY_INVALID));
+    assert(test_kt("_inst._sub._svc._tcp", AVAHI_KEY_SERVICE_SUBTYPE | AVAHI_KEY_SERVICE_TYPE));
+    assert(test_kt("_inst._sub._svc._tcp.", AVAHI_KEY_SERVICE_SUBTYPE | AVAHI_KEY_SERVICE_TYPE | AVAHI_KEY_DOMAIN_ROOT));
+    assert(test_kt("_inst._sub._svc._tcp.domain", AVAHI_KEY_SERVICE_SUBTYPE | AVAHI_KEY_SERVICE_TYPE | AVAHI_KEY_DOMAIN_NAME));
+    assert(test_kt("_inst._sub._svc._tcp.domain.", AVAHI_KEY_SERVICE_SUBTYPE | AVAHI_KEY_SERVICE_TYPE | AVAHI_KEY_DOMAIN_NAME | AVAHI_KEY_DOMAIN_ROOT));
+    assert(test_kt("name._inst._sub._svc._tcp.domain", AVAHI_KEY_SERVICE_NAME | AVAHI_KEY_SERVICE_SUBTYPE | AVAHI_KEY_SERVICE_TYPE | AVAHI_KEY_DOMAIN_NAME));
+    assert(test_kt("_name._inst._sub._svc._tcp.domain", AVAHI_KEY_SERVICE_NAME | AVAHI_KEY_SERVICE_SUBTYPE | AVAHI_KEY_SERVICE_TYPE | AVAHI_KEY_DOMAIN_NAME));
 
     return 0;
 }

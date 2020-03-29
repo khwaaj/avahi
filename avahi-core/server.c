@@ -51,6 +51,135 @@
 
 #define AVAHI_DEFAULT_CACHE_ENTRIES_MAX 4096
 
+static int reflect_rule_is_any(char* s) {
+    return (!s || !*s || !strcmp("*", s));
+}
+
+static int reflect_rule_is_none(char* s) {
+    return (s && !strcmp("-", s));
+}
+
+static AvahiStringList* reflect_rule_make_list(char **v) {
+    AvahiStringList *l = NULL;
+    if (v && !reflect_rule_is_any(*v)) {
+        if (!reflect_rule_is_none(*v))
+            do
+                l = avahi_string_list_add(l, *v++);
+            while (*v);
+        else
+            l = avahi_string_list_add(l, "");
+    }
+    return l;
+}
+
+AvahiReflectRule *avahi_reflect_rule_new(char *src, char *tgt, int acpt, char **svc, char** hst) {
+    AvahiReflectRule* r = avahi_malloc(sizeof(AvahiReflectRule));
+    if (!r)
+        return NULL;
+    r->source_interface = reflect_rule_is_any(src) ? NULL : avahi_strdup(src);
+    r->target_interface = reflect_rule_is_any(tgt) ? NULL : avahi_strdup(tgt);
+    r->accept = acpt;
+    r->services = reflect_rule_make_list(svc);
+    r->hosts = reflect_rule_make_list(hst);
+    return r;
+}
+
+AvahiReflectRule *avahi_reflect_rule_copy(const AvahiReflectRule *r) {
+    AvahiReflectRule* rr;
+    if (!r || !(rr = avahi_malloc(sizeof(AvahiReflectRule))))
+        return NULL;
+    rr->source_interface = avahi_strdup(r->source_interface);
+    rr->target_interface = avahi_strdup(r->target_interface);
+    rr->accept = r->accept;
+    rr->services = avahi_string_list_copy(r->services);
+    rr->hosts = avahi_string_list_copy(r->hosts);
+    return rr;
+}
+
+void avahi_reflect_rule_free(AvahiReflectRule *r) {
+    if (!r)
+        return;
+    avahi_string_list_free(r->hosts);
+    avahi_string_list_free(r->services);
+    avahi_free(r->target_interface);
+    avahi_free(r->source_interface);
+}
+
+AvahiReflectRule *avahi_reflect_rules_prepend(AvahiReflectRule *rh, AvahiReflectRule *r) {
+    AVAHI_LLIST_PREPEND(AvahiReflectRule, rule, rh, r);
+    return rh;
+}
+
+AvahiReflectRule *avahi_reflect_rules_prepend_n(AvahiReflectRule *rh, char **src, char **tgt, int acpt, char **svc, char** hst) {
+    if (src && tgt)
+        for (; *src; ++src)
+            for (char** t = tgt; *t; ++t)
+                rh = avahi_reflect_rules_prepend(rh, avahi_reflect_rule_new(*src, *t, acpt, svc, hst));
+    else if (src)
+        for (; *src; ++src)
+            rh = avahi_reflect_rules_prepend(rh, avahi_reflect_rule_new(*src, NULL, acpt, svc, hst));
+    else if (tgt)
+        for (; *tgt; ++tgt)
+            rh = avahi_reflect_rules_prepend(rh, avahi_reflect_rule_new(NULL, *tgt, acpt, svc, hst));
+    else
+        rh = avahi_reflect_rules_prepend(rh, avahi_reflect_rule_new(NULL, NULL, acpt, svc, hst));
+    return rh;
+}
+
+AvahiReflectRule *avahi_reflect_rules_copy(const AvahiReflectRule *rh) {
+    AvahiReflectRule* r = NULL;
+    if (rh) {
+        while (rh->rule_next) rh = rh->rule_next;
+        do r = avahi_reflect_rules_prepend(r, avahi_reflect_rule_copy(rh)); while((rh = rh->rule_prev));
+    }
+    return r;
+}
+
+void avahi_reflect_rules_free(AvahiReflectRule *rh) {
+    AvahiReflectRule* n;
+    for (; rh; rh = n) {
+        n = rh->rule_next;
+        avahi_reflect_rule_free(rh);
+    }
+}
+
+static void reflect_rules_log_debug(const AvahiReflectRule *rh) {
+    AvahiStringList *l;
+    char svc[256], *i = svc, *e = i + sizeof(svc) - 4;
+    int idx = 0;
+    stpcpy(e, "...");
+
+    avahi_log_debug("     %-12s  %-12s   %s", "ServiceIface", "ClientIface ", "Services / Hosts");
+    avahi_log_debug("     %-12s  %-12s   %s", "------------", "------------", "----------------");
+    for (; rh; rh = rh->rule_next) {
+        if (!rh->services)
+            i = stpcpy(i, "*");
+        else if (!*rh->services->text)
+            i = stpcpy(i, "-");
+        else
+            for (l = rh->services; l; l = l->next) {
+                i = stpncpy(i, (char*)l->text, e - i);
+                if (l->next) i = stpncpy(i, ",", e - i);
+            }
+        i = stpcpy(i, " / ");
+        if (!rh->hosts)
+            i = stpcpy(i, "*");
+        else if (!*rh->hosts->text)
+            i = stpcpy(i, "-");
+        else
+            for (l = rh->hosts; l; l = l->next) {
+                i = stpncpy(i, (char*)l->text, e - i);
+                if (l->next) i = stpncpy(i, ",", e - i);
+            }
+        avahi_log_debug("% 3d  %-12s  %-12s %c %s", idx++,
+            rh->source_interface ? rh->source_interface : "*",
+            rh->target_interface ? rh->target_interface : "*",
+            rh->accept ? ' ' : '!', i = svc);
+
+    }
+    avahi_log_debug("     %-12s  %-12s   %s", "------------", "------------", "----------------");
+}
+
 static void enum_aux_records(AvahiServer *s, AvahiInterface *i, const char *name, uint16_t type, void (*callback)(AvahiServer *s, AvahiRecord *r, int flush_cache, void* userdata), void* userdata) {
     assert(s);
     assert(i);
@@ -496,18 +625,114 @@ void avahi_server_generate_response(AvahiServer *s, AvahiInterface *i, AvahiDnsP
     avahi_record_list_flush(s->record_list);
 }
 
-static int reflect_interface_is_visible(AvahiServer *s, AvahiInterface *iface, AvahiInterface *to) {
-    AvahiStringList* l;
-    if (!s->config.reflect_interfaces_visibility)
+static int match_interface(AvahiInterface *i, const char* n) {
+    assert(i);
+    if (!n)
         return 1;
-    if (!(l = avahi_hashmap_lookup(s->config.reflect_interfaces_visibility, iface->hardware->name)))
+    return !strcmp(i->hardware->name, n);
+}
+
+static int match_service(AvahiStringList *l, const char* n) {
+    if (!l)
         return 1;
-    do {
-        if (strcmp(to->hardware->name, (char*)l->text) == 0) {
+    if (!n || !*l->text)
+        return 0;
+    do
+        if (strstr(n, (char*)l->text) != NULL)
             return 1;
-        }
-    } while ((l = l->next));
+    while ((l = l->next));
     return 0;
+}
+
+static int match_host(AvahiStringList *l, const char* n) {
+    if (!l)
+        return 1;
+    if (!n || !*l->text)
+        return 0;
+    do
+        if (strcasestr(n, (char*)l->text) != NULL)
+            return 1;
+    while ((l = l->next));
+    return 0;
+}
+
+static int reflect_apply_rule(AvahiReflectRule *rr, const char* l, AvahiInterface *s, char d, AvahiInterface *t, const char* sn, const char* hn, int idx) {
+    assert('<' == d || '>' == d);
+
+    if (!match_interface(s, rr->source_interface) || !match_interface(t, rr->target_interface))
+        return -1;
+
+    if (sn && !hn) {
+        if (!match_service(rr->services, sn))
+            return -1;
+    } else if (hn && !sn) {
+        if (!match_host(rr->hosts, hn))
+            return -1;
+    } else {
+        if (!match_service(rr->services, sn) || !match_host(rr->hosts, hn))
+            return -1;
+    }
+
+    avahi_log_debug("ReflectRule[%d]: %s %s [%s %c %s%s%s%s%s%s]", idx,
+        rr->accept ? "accept" : "reject", l,
+        s->hardware->name, d, t->hardware->name,
+        sn || hn ? " :" : "",
+        sn ? " service=" : "", sn ? sn : "",
+        hn ? " host=" : "", hn ? hn : "");
+
+    return rr->accept;
+}
+
+
+static int reflect_apply_rules(AvahiReflectRule *rr, const char* l, AvahiInterface *s, char d, AvahiInterface *t, const char* sn, const char* hn) {
+    if (!rr)
+        return 1;
+
+    for (int idx = 0; rr; rr = rr->rule_next) {
+        int m = reflect_apply_rule(rr, l, s, d, t, sn, hn, idx++);
+        if (m >= 0)
+            return m;
+    }
+
+    avahi_log_debug("ReflectRule[*]: %s %s [%s %c %s%s%s%s%s%s]",
+        "accept", l,
+        s->hardware->name, d, t->hardware->name,
+        sn || hn ? " :" : "",
+        sn ? " service=" : "", sn ? sn : "",
+        hn ? " host=" : "", hn ? hn : "");
+
+    return 1;
+}
+
+static int reflect_apply_rules_on_key(AvahiReflectRule *rr, const char* l, AvahiInterface *s, char d, AvahiInterface *t, AvahiKey *k) {
+    char *sn = NULL, *hn = NULL;
+    switch (k->type) {
+        case AVAHI_DNS_TYPE_A:
+        case AVAHI_DNS_TYPE_NS:
+        case AVAHI_DNS_TYPE_CNAME:
+        case AVAHI_DNS_TYPE_MX:
+        case AVAHI_DNS_TYPE_AAAA:
+            hn = k->name;
+            break;
+        case AVAHI_DNS_TYPE_PTR:
+        case AVAHI_DNS_TYPE_TXT:
+        case AVAHI_DNS_TYPE_SRV:
+            sn = k->name;
+            break;
+        default:
+            if (k->name && *k->name) {
+                 if (avahi_assess_domain_name(k->name) & AVAHI_KEY_SERVICE_TYPE)
+                    sn = k->name;
+                 else
+                    hn = k->name;
+            }
+            break;
+    }
+    return reflect_apply_rules(rr, l, s, d, t, sn, hn);
+}
+
+static int reflect_apply_rules_on_record(AvahiReflectRule *rr, const char* l, AvahiInterface *s, char d, AvahiInterface *t, AvahiRecord *r) {
+    return reflect_apply_rules_on_key(rr, l, s, d, t, r->key);
 }
 
 static void reflect_response(AvahiServer *s, AvahiInterface *i, AvahiRecord *r, int flush_cache) {
@@ -522,11 +747,8 @@ static void reflect_response(AvahiServer *s, AvahiInterface *i, AvahiRecord *r, 
 
     for (j = s->monitor->interfaces; j; j = j->interface_next)
         if (j != i && (s->config.reflect_ipv || j->protocol == i->protocol)) {
-            if (!reflect_interface_is_visible(s, i, j)) {
-                avahi_log_debug("Reject response reflection from [%s] to [%s]", i->hardware->name, j->hardware->name);
+            if (!reflect_apply_rules_on_record(s->config.reflect_rules, "response", i, '>', j, r))
                 continue;
-            }
-            avahi_log_debug("Match response reflection from [%s] to [%s]", i->hardware->name, j->hardware->name);
             avahi_interface_post_response(j, r, flush_cache, NULL, 1);
         }
 }
@@ -563,11 +785,8 @@ static void reflect_query(AvahiServer *s, AvahiInterface *i, AvahiKey *k) {
 
     for (j = s->monitor->interfaces; j; j = j->interface_next)
         if (j != i && (s->config.reflect_ipv || j->protocol == i->protocol)) {
-            if (!reflect_interface_is_visible(s, j, i)) {
-                avahi_log_debug("Reject query reflection from [%s] to [%s]", i->hardware->name, j->hardware->name);
+            if (!reflect_apply_rules_on_key(s->config.reflect_rules, "query", j, '<', i, k))
                 continue;
-            }
-            avahi_log_debug("Match query reflection from [%s] to [%s]", i->hardware->name, j->hardware->name);
 
             /* Post the query to other networks */
             avahi_interface_post_query(j, k, 1, NULL);
@@ -591,11 +810,8 @@ static void reflect_probe(AvahiServer *s, AvahiInterface *i, AvahiRecord *r) {
 
     for (j = s->monitor->interfaces; j; j = j->interface_next)
         if (j != i && (s->config.reflect_ipv || j->protocol == i->protocol)) {
-            if (!reflect_interface_is_visible(s, j, i)) {
-                avahi_log_debug("Reject probe reflection from [%s] to [%s]", i->hardware->name, j->hardware->name);
+            if (!reflect_apply_rules_on_record(s->config.reflect_rules, "probe", j, '<', i, r))
                 continue;
-            }
-            avahi_log_debug("Match probe reflection from [%s] to [%s]", i->hardware->name, j->hardware->name);
             avahi_interface_post_probe(j, r, 1);
         }
 }
@@ -704,7 +920,6 @@ static void handle_response_packet(AvahiServer *s, AvahiDnsPacket *p, AvahiInter
             avahi_log_debug(__FILE__": Packet too short or invalid while reading response record. (Maybe a UTF-8 problem?)");
             break;
         }
-
         if (!avahi_key_is_pattern(record->key)) {
             /* Filter services that will be cached. Allow all local services */
             if (!from_local_iface && s->config.enable_reflector && s->config.reflect_filters != NULL) {
@@ -1468,6 +1683,11 @@ AvahiServer *avahi_server_new(const AvahiPoll *poll_api, const AvahiServerConfig
         return NULL;
     }
 
+    if (s->config.enable_reflector && s->config.reflect_rules) {
+        avahi_log_debug("Reflector rules enabled:");
+        reflect_rules_log_debug(s->config.reflect_rules);
+    }
+
     if ((e = setup_sockets(s)) < 0) {
         if (error)
             *error = e;
@@ -1677,7 +1897,7 @@ AvahiServerConfig* avahi_server_config_init(AvahiServerConfig *c) {
     c->enable_reflector = 0;
     c->reflect_ipv = 0;
     c->reflect_filters = NULL;
-    c->reflect_interfaces_visibility = NULL;
+    c->reflect_rules = NULL;
     c->add_service_cookie = 0;
     c->enable_wide_area = 0;
     c->n_wide_area_servers = 0;
@@ -1701,51 +1921,15 @@ void avahi_server_config_free(AvahiServerConfig *c) {
     avahi_free(c->domain_name);
     avahi_string_list_free(c->browse_domains);
     avahi_string_list_free(c->reflect_filters);
-    if (c->reflect_interfaces_visibility)
-        avahi_hashmap_free(c->reflect_interfaces_visibility);
+    avahi_reflect_rules_free(c->reflect_rules);
     avahi_string_list_free(c->allow_interfaces);
     avahi_string_list_free(c->deny_interfaces);
-}
-
-static void interfaces_visibility_copy_callback(void *key, void *value, void *userdata) {
-    AvahiHashmap **m = (AvahiHashmap**)userdata;
-    char *k;
-    AvahiStringList *v;
-    if (!*m)
-        return;
-    if (!(k = avahi_strdup(key))) {
-        *m = NULL;
-        return;
-    }
-    if (!(v = avahi_string_list_copy(value)) && value) {
-        avahi_free(k);
-        *m = NULL;
-        return;
-    }
-    if (avahi_hashmap_insert(*m, k, v) == -1) {
-        avahi_string_list_free(v);
-        avahi_free(k);
-        *m = NULL;
-        return;
-    }
-}
-
-static AvahiHashmap* interfaces_visibility_copy(AvahiHashmap *i) {
-    AvahiHashmap *c, *r;
-    if (!i)
-        return NULL;
-    if (!(r = c = avahi_hashmap_new((AvahiHashFunc)avahi_string_hash, (AvahiEqualFunc)avahi_string_equal, avahi_free, (AvahiFreeFunc)avahi_string_list_free)))
-        return NULL;
-    avahi_hashmap_foreach(i, interfaces_visibility_copy_callback, &r);
-    if (!r)
-        avahi_hashmap_free(c);
-    return r;
 }
 
 AvahiServerConfig* avahi_server_config_copy(AvahiServerConfig *ret, const AvahiServerConfig *c) {
     char *d = NULL, *h = NULL;
     AvahiStringList *browse = NULL, *allow = NULL, *deny = NULL, *reflect = NULL ;
-    AvahiHashmap *interfaces_visibility = NULL;
+    AVAHI_LLIST_HEAD(AvahiReflectRule, rules);
     assert(ret);
     assert(c);
 
@@ -1789,7 +1973,7 @@ AvahiServerConfig* avahi_server_config_copy(AvahiServerConfig *ret, const AvahiS
         return NULL;
     }
 
-    if (!(interfaces_visibility = interfaces_visibility_copy(c->reflect_interfaces_visibility)) && c->reflect_interfaces_visibility) {
+    if (!(rules = avahi_reflect_rules_copy(c->reflect_rules)) && c->reflect_rules) {
         avahi_string_list_free(reflect);
         avahi_string_list_free(deny);
         avahi_string_list_free(allow);
@@ -1806,7 +1990,7 @@ AvahiServerConfig* avahi_server_config_copy(AvahiServerConfig *ret, const AvahiS
     ret->allow_interfaces = allow;
     ret->deny_interfaces = deny;
     ret->reflect_filters = reflect;
-    ret->reflect_interfaces_visibility = interfaces_visibility;
+    ret->reflect_rules = rules;
 
     return ret;
 }

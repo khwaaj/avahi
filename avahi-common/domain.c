@@ -48,14 +48,15 @@ char *avahi_unescape_label(const char **name, char *dest, size_t size) {
 
     d = dest;
 
+    if (**name == '.')
+        (*name)++;
+
     for (;;) {
         if (i >= size)
             return NULL;
 
-        if (**name == '.') {
-            (*name)++;
+        if (**name == '.')
             break;
-        }
 
         if (**name == 0)
             break;
@@ -194,7 +195,7 @@ char *avahi_normalize_name(const char *s, char *ret_s, size_t size) {
 
         if (label[0] == 0) {
 
-            if (*s == 0 && empty)
+            if (*s == 0 || empty)
                 return ret_s;
 
             return NULL;
@@ -357,7 +358,7 @@ const char *avahi_get_type_from_subtype(const char *t) {
     if (*t)
         return NULL;
 
-    return ret;
+    return ret + 1;
 }
 
 int avahi_is_valid_service_subtype(const char *t) {
@@ -367,7 +368,6 @@ int avahi_is_valid_service_subtype(const char *t) {
 }
 
 int avahi_is_valid_domain_name(const char *t) {
-    int is_first = 1;
     assert(t);
 
     if (strlen(t) >= AVAHI_DOMAIN_NAME_MAX)
@@ -379,15 +379,9 @@ int avahi_is_valid_domain_name(const char *t) {
         if (!(avahi_unescape_label(&t, label, sizeof(label))))
             return 0;
 
-        /* Explicitly allow the root domain name */
-        if (is_first && label[0] == 0 && *t == 0)
-            return 1;
-
-        is_first = 0;
-
-        if (label[0] == 0)
+        /* Only allow an empty label at the end, i.e. the root domain name */
+        if (label[0] == 0 && *t != 0)
             return 0;
-
     } while (*t);
 
     return 1;
@@ -608,4 +602,78 @@ int avahi_is_valid_fqdn(const char *t) {
         return 0;
 
     return 1;
+}
+
+static int _assess_domain_name(const char* n) {
+    return *n ? AVAHI_KEY_DOMAIN_NAME : AVAHI_KEY_DOMAIN_ROOT;
+}
+
+static int _assess_service_name(const char* n) {
+    return *n ? AVAHI_KEY_SERVICE_NAME : AVAHI_KEY_INVALID;
+}
+
+static int _assess_service_type(const char* s, const char* p) {
+    if (!strcasecmp("_tcp", p) || !strcasecmp("_udp", p))
+        return (s[0] == '_' && s[1]) ? AVAHI_KEY_SERVICE_TYPE : AVAHI_KEY_INVALID;
+    if (!strcasecmp("_sub", p))
+        return (s[0] == '_' && s[1]) ? AVAHI_KEY_SERVICE_SUBTYPE : AVAHI_KEY_INVALID;
+    return AVAHI_KEY_NONE;
+}
+
+int avahi_assess_domain_name(const char* k) {
+    int r = AVAHI_KEY_NONE, lm, ln = 0, li = 0;
+    char l[3][AVAHI_LABEL_MAX], *p;
+
+    if (!k || (lm = strlen(k)) >= AVAHI_DOMAIN_NAME_MAX)
+        return AVAHI_KEY_INVALID;
+
+    do {
+      __load_label:
+        if (!avahi_unescape_label(&k, p = l[ln++ % 3], AVAHI_LABEL_MAX))
+            return AVAHI_KEY_INVALID;
+
+        if (!*k) {
+            if (ln < lm) lm = ln;
+        } else if (!*p)
+            return AVAHI_KEY_INVALID;
+
+        switch (r) {
+            case AVAHI_KEY_NONE:
+                if ((ln - li) < 3)
+                    goto __load_label;
+                r |= _assess_service_type(l[li % 3], l[(li + 1) % 3]);
+                if (r != AVAHI_KEY_NONE) {
+                    li += 2;
+                    if (r == AVAHI_KEY_SERVICE_SUBTYPE || li >= lm)
+                        break;
+                } else {
+                    r |= _assess_service_type(l[(li + 1) % 3], l[(li + 2) % 3]);
+                    if (r != AVAHI_KEY_NONE) {
+                        r |= _assess_service_name(l[li]);
+                        li += 3;
+                        break;
+                    }
+                }
+                /* fall through */
+
+            default:
+                do {
+                    r |= _assess_domain_name(l[li++ % 3]);
+                } while (li < ln && li < lm);
+                break;
+
+            case AVAHI_KEY_SERVICE_NAME | AVAHI_KEY_SERVICE_SUBTYPE:
+            case AVAHI_KEY_SERVICE_SUBTYPE:
+                if ((ln - li) < 2)
+                    goto __load_label;
+                r |= _assess_service_type(l[li % 3], l[(li + 1) % 3]);
+                if (!(r & AVAHI_KEY_SERVICE_TYPE))
+                    return AVAHI_KEY_INVALID;
+                li += 2;
+                break;
+        }
+
+    } while (AVAHI_KEY_INVALID != r && *k);
+
+    return r;
 }

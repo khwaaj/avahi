@@ -838,28 +838,36 @@ static int load_config_file(DaemonConfig *c) {
                         c->server_config.reflect_filters = avahi_string_list_add(c->server_config.reflect_filters, *t);
 
                     avahi_strfreev(e);
-                } else if (strncasecmp(p->key, "reflect-interface-visibility:", 29) == 0 && *(p->key + 29)) {
-                    char *k = avahi_strdup(p->key + 29), *v = p->value;
-                    int vn;
-                    AvahiStringList *l = NULL;
-                    if (!c->server_config.reflect_interfaces_visibility) {
-                        c->server_config.reflect_interfaces_visibility = avahi_hashmap_new((AvahiHashFunc)avahi_string_hash, (AvahiEqualFunc)avahi_string_equal, avahi_free, (AvahiFreeFunc)avahi_string_list_free);
+                } else if (strncasecmp(p->key, "reflect-rule", 12) == 0 && memchr(":>", p->key[12], 3)) {
+                    char *cur = p->key + 12, tok = *cur++, *next = cur;
+                    char **src = NULL, **tgt = NULL, **svc = NULL, **hst = NULL;
+                    int acpt = 1;
+                    if (tok == ':') {
+                        tok = *(next = cur + strcspn(cur, ">"));
+                        *next++ = 0;
+                        src = avahi_split_csv(cur);
                     }
-
-                    for (; isblank(*v); ++v);
-                    for (vn = strlen(v); isblank(v[vn - 1]); --vn);
-
-                    if (!*v || strncmp("!", v, vn) == 0) {
-                        l = avahi_string_list_add(l, "");
-                    } else if (strncmp("*", v, vn) != 0) {
-                        char **e = avahi_split_csv(v), **t;
-                        for (t = e; *t; t++)
-                            l = avahi_string_list_add(l, *t);
-                        avahi_strfreev(e);
+                    if (tok == '>') {
+                        tgt = avahi_split_csv(next);
                     }
-                    if (avahi_hashmap_insert(c->server_config.reflect_interfaces_visibility, k, l) == -1) {
-                        avahi_free(k);
+                    cur = p->value, tok = *cur, next = cur;
+                    if (tok == '!') {
+                        acpt = 0;
+                        tok = *(next = ++cur);
                     }
+                    if (';' != tok) {
+                        tok = *(next = cur + strcspn(cur, ";"));
+                        *next = 0;
+                        svc = avahi_split_csv(cur);
+                    }
+                    if (';' == tok) {
+                        hst = avahi_split_csv(++next);
+                    }
+                    c->server_config.reflect_rules = avahi_reflect_rules_prepend_n(c->server_config.reflect_rules, src, tgt, acpt, svc, hst);
+                    avahi_strfreev(hst);
+                    avahi_strfreev(svc);
+                    avahi_strfreev(tgt);
+                    avahi_strfreev(src);
                 } else {
                     avahi_log_error("Invalid configuration key \"%s\" in group \"%s\"\n", p->key, g->name);
                     goto finish;

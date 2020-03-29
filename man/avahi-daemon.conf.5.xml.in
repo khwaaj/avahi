@@ -339,16 +339,38 @@
     </option>
 
     <option>
-      <p><opt>reflect-interface-visibility:<arg>source-interface</arg>=</opt>
-      Specify the visibility of an interface to a set of other
-      interfaces. Each interface listed will be able to participate
-      in reflection of services with the source interface. The
-      default is to allow reflection with all interfaces. If an
-      empty value or "!" is given, no services from the interface
-      will be reflected to any other interface (but it will still
-      receive reflections from other interfaces, unless prohibited
-      by their configuration). Conversely, giving a "*" value
-      allows reflection to all interfaces (same as the default).</p>
+      <p>
+        <opt>reflect-rule:<arg>sources</arg>><arg>targets</arg>=<arg>services</arg>;<arg>hosts</arg></opt>
+        Define a reflection rule for a set of source and target interfaces,
+        filtering services and hosts. All arguments are optional, comma
+        separated, lists and may be left out completely or passed <arg>*</arg> to
+        match anything. If the first character after the <opt>=</opt> is a <arg>!</arg>,
+        packets matching the rule will be rejected, otherwise they are
+        accepted. Rules are processed in order, top to bottom, much like
+        firewall rules. If a packet matches no rule it will be implicitly
+        accepted. Typically a set of rules would be set up to accept/reject
+        packets matching certain criteraia and then a final rule is added
+        to reject everything else:
+      </p>
+      <p>
+        <arg>reflect-rule=!_smb,_nfs;secret</arg>
+        - reject services matching <arg>_smb</arg> or <arg>_nfs</arg> &amp; hosts matching <arg>secret</arg>
+      </p>
+      <p>
+          <arg>reflect-rule:main=!</arg>
+          - hide all services on <arg>main</arg>
+      </p>
+      <p>
+        <arg>reflect-rule:guest>main=*</arg>
+        - show all services on <arg>guest</arg> to <arg>main</arg>
+      </p>
+      <p>
+        <arg>reflect-rule:iot>main,guest=_airplay</arg>
+        - show <arg>iot</arg> services matching <arg>_airplay</arg> to <arg>main</arg> and <arg>guest</arg></p>
+      <p>
+        <arg>reflect-rule=!</arg>
+        - reject everything
+      </p>
     </option>
 
   </section>

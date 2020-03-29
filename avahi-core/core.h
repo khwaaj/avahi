@@ -30,8 +30,8 @@ typedef struct AvahiServer AvahiServer;
 #include <avahi-common/defs.h>
 #include <avahi-common/watch.h>
 #include <avahi-common/timeval.h>
+#include <avahi-common/llist.h>
 #include <avahi-core/rr.h>
-#include <avahi-core/hashmap.h>
 
 AVAHI_C_DECL_BEGIN
 
@@ -40,6 +40,16 @@ AVAHI_C_DECL_BEGIN
 
 /** Prototype for callback functions which are called whenever the state of an AvahiServer object changes */
 typedef void (*AvahiServerCallback) (AvahiServer *s, AvahiServerState state, void* userdata);
+
+typedef struct AvahiReflectRule AvahiReflectRule;
+struct AvahiReflectRule {
+    AVAHI_LLIST_FIELDS(AvahiReflectRule, rule);
+    char* source_interface;
+    char* target_interface;
+    int accept;
+    AvahiStringList* services;
+    AvahiStringList* hosts;
+};
 
 /** Stores configuration options for a server instance */
 typedef struct AvahiServerConfig {
@@ -58,7 +68,7 @@ typedef struct AvahiServerConfig {
     int enable_reflector;             /**< Reflect incoming mDNS traffic to all local networks. This allows mDNS based network browsing beyond ethernet borders */
     int reflect_ipv;                  /**< if enable_reflector is 1, enable/disable reflecting between IPv4 and IPv6 */
     AvahiStringList *reflect_filters;  /**< if enable_reflector is 1, will only add services containing one of these strings */
-    AvahiHashmap *reflect_interfaces_visibility; /**< If enable_reflector is 1, specify visibility of services on an interface to other interfaces */
+    AVAHI_LLIST_HEAD(AvahiReflectRule, reflect_rules); /**< If enable_reflector is 1, will only reflect services matching the rules */
     int add_service_cookie;           /**< Add magic service cookie to all locally generated records implicitly */
     int enable_wide_area;             /**< Enable wide area support */
     AvahiAddress wide_area_servers[AVAHI_WIDE_AREA_SERVERS_MAX]; /** Unicast DNS server to use for wide area lookup */
@@ -73,6 +83,27 @@ typedef struct AvahiServerConfig {
     AvahiUsec ratelimit_interval;     /**< If non-zero, rate-limiting interval parameter. */
     unsigned ratelimit_burst;         /**< If ratelimit_interval is non-zero, rate-limiting burst parameter. */
 } AvahiServerConfig;
+
+/** Create new rule object from the given arguments. Any pointer argument may be NULL. Returns the created object or NULL. */
+AvahiReflectRule *avahi_reflect_rule_new(char *src, char *tgt, int acpt, char **svc, char** hst);
+
+/** Make a copy of the provided rule object. Returns the created copy or NULL. */
+AvahiReflectRule *avahi_reflect_rule_copy(const AvahiReflectRule *r);
+
+/** Free the provided rule object. */
+void avahi_reflect_rule_free(AvahiReflectRule *r);
+
+/** Prepend a rule to the rules list head. Returns the new list head. */
+AvahiReflectRule *avahi_reflect_rules_prepend(AvahiReflectRule *rh, AvahiReflectRule *r);
+
+/** Create rules from the given arguments and prepend to the rules list head. Returns the new list head. */
+AvahiReflectRule *avahi_reflect_rules_prepend_n(AvahiReflectRule *rh, char **src, char **tgt, int acpt, char **svc, char** hst);
+
+/** Make a copy of rules list. Returns the created copy or NULL. */
+AvahiReflectRule *avahi_reflect_rules_copy(const AvahiReflectRule *rh);
+
+/** Free the provided rules list. */
+void avahi_reflect_rules_free(AvahiReflectRule *rh);
 
 /** Allocate a new mDNS responder object. */
 AvahiServer *avahi_server_new(

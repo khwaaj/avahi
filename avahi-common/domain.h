@@ -124,6 +124,24 @@ const char *avahi_get_type_from_subtype(const char *t);
 
 /** @} */
 
+/** @{ \name Domain name assessment APIs */
+
+enum {
+    AVAHI_KEY_INVALID = -1,
+    AVAHI_KEY_NONE = 0,
+
+    AVAHI_KEY_DOMAIN_ROOT = 1,
+    AVAHI_KEY_DOMAIN_NAME = 2,
+    AVAHI_KEY_SERVICE_TYPE = 4,
+    AVAHI_KEY_SERVICE_SUBTYPE = 8,
+    AVAHI_KEY_SERVICE_NAME = 16,
+};
+
+/* Assess which domain parts are represented in a key name. Returns one or more AVAHI_KEY_* flags or AVAHI_KEY_INVALID on error. */
+int avahi_assess_domain_name(const char* k);
+
+/** @} */
+
 AVAHI_C_DECL_END
 
 #endif
